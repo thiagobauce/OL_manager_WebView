@@ -1,5 +1,7 @@
 package com.example.ol_app;
 
+import static androidx.constraintlayout.helper.widget.MotionEffect.TAG;
+
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -18,6 +20,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.util.Log;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
@@ -32,11 +35,13 @@ import java.util.Date;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static String file_type = "*/*";
+    private boolean multiple_files = true;
+    private static String file_type     = "*/*";
     private String cam_file_data = null;
     private ValueCallback<Uri> file_data;
-    private ValueCallback<Uri> file_path;
+    private ValueCallback<Uri[]> file_path;
     private final static int file_req_code = 1;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,21 +53,30 @@ public class MainActivity extends AppCompatActivity {
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setJavaScriptCanOpenWindowsAutomatically(true);
         webView.getSettings().setLoadWithOverviewMode(true);
+        webView.getSettings().setLoadsImagesAutomatically(true);
+        webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().getAllowFileAccess();
         webView.getSettings().getAllowFileAccessFromFileURLs();
         webView.getSettings().setDomStorageEnabled(true);
-        webView.loadUrl("http://sistema.player.net.br:8182/#/");
-
-        webView.setWebViewClient(new WebViewClient() {
+        webView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
-                                             WebChromeClient.FileChooserParams fileChooserParams) {
+            public void onProgressChanged(WebView view, int newProgress) {
+                // progress bar
+            }
+
+            /*-- handling input[type="file"] requests for android API 21+ --*/
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
 
                 if(file_permission() && Build.VERSION.SDK_INT >= 21) {
-                    file_path = (ValueCallback<Uri>) filePathCallback;
+                    file_path = filePathCallback;
                     Intent takePictureIntent = null;
+                    Intent takeVideoIntent = null;
+
+                    boolean includeVideo = false;
                     boolean includePhoto = false;
+
                     /*-- checking the accept parameter to determine which intent(s) to include --*/
+
                     paramCheck:
                     for (String acceptTypes : fileChooserParams.getAcceptTypes()) {
                         String[] splitTypes = acceptTypes.split(", ?+");
@@ -71,16 +85,24 @@ public class MainActivity extends AppCompatActivity {
                             switch (acceptType) {
                                 case "*/*":
                                     includePhoto = true;
+                                    includeVideo = true;
                                     break paramCheck;
                                 case "image/*":
                                     includePhoto = true;
                                     break;
+                                case "video/*":
+                                    includeVideo = true;
+                                    break;
                             }
                         }
                     }
+
                     if (fileChooserParams.getAcceptTypes().length == 0) {
+
                         /*-- no `accept` parameter was specified, allow both photo and video --*/
+
                         includePhoto = true;
+                        includeVideo = true;
                     }
 
                     if (includePhoto) {
@@ -91,6 +113,7 @@ public class MainActivity extends AppCompatActivity {
                                 photoFile = create_image();
                                 takePictureIntent.putExtra("PhotoPath", cam_file_data);
                             } catch (IOException ex) {
+                                Log.e(TAG, "Image file creation failed", ex);
                             }
                             if (photoFile != null) {
                                 cam_file_data = "file:" + photoFile.getAbsolutePath();
@@ -102,14 +125,41 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
+                    if (includeVideo) {
+                        takeVideoIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
+                        if (takeVideoIntent.resolveActivity(MainActivity.this.getPackageManager()) != null) {
+                            File videoFile = null;
+                            try {
+                                videoFile = create_video();
+                            } catch (IOException ex) {
+                                Log.e(TAG, "Video file creation failed", ex);
+                            }
+                            if (videoFile != null) {
+                                cam_file_data = "file:" + videoFile.getAbsolutePath();
+                                takeVideoIntent.putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(videoFile));
+                            } else {
+                                cam_file_data = null;
+                                takeVideoIntent = null;
+                            }
+                        }
+                    }
+
                     Intent contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
                     contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
                     contentSelectionIntent.setType(file_type);
 
+                    if (multiple_files) {
+                        contentSelectionIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+                    }
+
 
                     Intent[] intentArray;
-                    if (takePictureIntent != null) {
+                    if (takePictureIntent != null && takeVideoIntent != null) {
+                        intentArray = new Intent[]{takePictureIntent, takeVideoIntent};
+                    } else if (takePictureIntent != null) {
                         intentArray = new Intent[]{takePictureIntent};
+                    } else if (takeVideoIntent != null) {
+                        intentArray = new Intent[]{takeVideoIntent};
                     } else {
                         intentArray = new Intent[0];
                     }
@@ -124,8 +174,12 @@ public class MainActivity extends AppCompatActivity {
                     return false;
                 }
             }
+
         });
+
+        webView.loadUrl("http://sistema.player.net.br:8182/#/");
     }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent intent){
         super.onActivityResult(requestCode, resultCode, intent);
@@ -186,6 +240,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
     }
+
     @Override
     public void onConfigurationChanged(Configuration newConfig){
         super.onConfigurationChanged(newConfig);
@@ -206,5 +261,14 @@ public class MainActivity extends AppCompatActivity {
         File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
         return File.createTempFile(imageFileName,".jpg",storageDir);
     }
+
+    private File create_video() throws IOException {
+        @SuppressLint("SimpleDateFormat")
+        String file_name    = new SimpleDateFormat("yyyy_mm_ss").format(new Date());
+        String new_name     = "file_"+file_name+"_";
+        File sd_directory   = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        return File.createTempFile(new_name, ".3gp", sd_directory);
+    }
+
 
 }
