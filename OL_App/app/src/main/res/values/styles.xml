@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Define a cor da barra de status -->
+        <item name="android:statusBarColor">@color/status_bar</item>
+        <!-- Define a cor do fundo do aplicativo -->
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+</resources>
